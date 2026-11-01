@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>모임 지도</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#ffffff; --fg:#1d1d1f; --sub:#6e6e73; --accent:#2f6df6; --mine:#2f6df6; --line:#e5e5ea; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; color:var(--fg); background:var(--bg); }
+  [hidden] { display:none !important; }
+
+  /* ---------- 입장 화면 ---------- */
+  #join { min-height:100%; display:flex; flex-direction:column; justify-content:center; padding:24px 20px; max-width:420px; margin:0 auto; }
+  #join h1 { font-size:26px; margin:0 0 6px; }
+  #join p { color:var(--sub); margin:0 0 20px; line-height:1.5; font-size:14px; }
+  label { font-size:13px; color:var(--sub); display:block; margin:14px 0 6px; }
+  input[type=text] { width:100%; padding:14px; border:1px solid var(--line); border-radius:12px; font-size:16px; }
+  .btn { width:100%; padding:14px; border:0; border-radius:12px; font-size:16px; font-weight:600; background:var(--accent); color:#fff; margin-top:16px; }
+  .btn.sec { background:#f2f2f7; color:var(--fg); }
+  .note { font-size:12px; color:var(--sub); margin-top:18px; line-height:1.6; }
+
+  /* ---------- 지도 화면 ---------- */
+  #app { position:fixed; inset:0; }
+  #map { position:absolute; inset:0; }
+  #topbar { position:absolute; top:calc(env(safe-area-inset-top) + 10px); left:10px; right:10px; z-index:1000; display:flex; gap:8px; align-items:center; }
+  .pill { background:rgba(255,255,255,.96); border-radius:999px; padding:9px 14px; font-size:13px; box-shadow:0 2px 8px rgba(0,0,0,.18); border:0; color:var(--fg); }
+  #roomInfo { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #bottom { position:absolute; left:0; right:0; bottom:0; z-index:1000; padding:10px 10px calc(env(safe-area-inset-bottom) + 10px); background:linear-gradient(to top, rgba(255,255,255,.98) 70%, rgba(255,255,255,0)); }
+  #meetRow { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  #meetBtn { flex:1; padding:12px; border:0; border-radius:12px; font-size:15px; font-weight:700; background:#34c759; color:#fff; }
+  #meetBtn.on { background:#ff3b30; }
+  #meetState { font-size:12px; color:var(--sub); margin-bottom:8px; }
+  #sendRow { display:flex; gap:8px; }
+  #msg { flex:1; padding:13px; border:1px solid var(--line); border-radius:12px; font-size:16px; background:#fff; }
+  #sendBtn { padding:0 18px; border:0; border-radius:12px; background:var(--accent); color:#fff; font-weight:700; font-size:15px; }
+
+  /* 말풍선 */
+  .bubble-wrap { background:transparent; border:0; }
+  .bubble { position:relative; transform:translate(-50%,-100%); margin-top:-6px; width:max-content; max-width:190px; background:#2b2b2e; color:#fff; padding:7px 10px; border-radius:12px; font-size:13px; line-height:1.35; box-shadow:0 2px 8px rgba(0,0,0,.3); word-break:break-all; }
+  .bubble.mine { background:var(--mine); }
+  .bubble b { display:block; font-size:11px; opacity:.75; margin-bottom:2px; }
+  .bubble::after { content:""; position:absolute; left:50%; bottom:-6px; margin-left:-6px; border:6px solid transparent; border-top-color:#2b2b2e; border-bottom:0; }
+  .bubble.mine::after { border-top-color:var(--mine); }
+  .leaflet-bottom { bottom:140px; }   /* 하단 입력 패널에 확대 버튼·지도 저작권 표시가 가려지지 않게 위로 올림 */
+  .member-label { background:#fff; border:0; box-shadow:0 1px 4px rgba(0,0,0,.3); font-weight:700; font-size:12px; }
+
+  /* 대화 목록 */
+  #listPanel { position:absolute; top:calc(env(safe-area-inset-top) + 56px); left:10px; right:10px; max-height:40%; overflow:auto; z-index:1000; background:rgba(255,255,255,.97); border-radius:14px; padding:10px 14px; box-shadow:0 4px 16px rgba(0,0,0,.25); }
+  #listPanel .row { padding:7px 0; border-bottom:1px solid var(--line); font-size:14px; word-break:break-all; }
+  #listPanel .row:last-child { border-bottom:0; }
+  #listPanel .row small { color:var(--sub); margin-right:6px; }
+  #toast { position:absolute; left:50%; top:calc(env(safe-area-inset-top) + 60px); transform:translateX(-50%); z-index:2000; background:rgba(0,0,0,.8); color:#fff; padding:9px 14px; border-radius:10px; font-size:13px; max-width:90%; }
+</style>
+</head>
+<body>
+
+<!-- 입장 화면 -->
+<div id="join">
+  <h1>모임 지도</h1>
+  <p>초대받은 사람끼리 지도 위에서 대화해요.<br>내 위치는 <b>'모임 시작'</b>을 눌렀을 때만 공유돼요.</p>
+  <label for="nick">닉네임 (12자까지)</label>
+  <input id="nick" type="text" maxlength="12" placeholder="예: 라이더1" autocomplete="off">
+  <label for="roomIn">방 코드 (초대 링크로 들어오면 자동 입력)</label>
+  <input id="roomIn" type="text" maxlength="20" placeholder="비워두고 '새 모임방'을 누르면 자동 생성" autocomplete="off">
+  <button class="btn" id="enterBtn">입장</button>
+  <button class="btn sec" id="createBtn">새 모임방 만들기</button>
+  <div class="note" id="modeNote"></div>
+</div>
+
+<!-- 지도 화면 -->
+<div id="app" hidden>
+  <div id="map"></div>
+  <div id="topbar">
+    <div class="pill" id="roomInfo"></div>
+    <button class="pill" id="listBtn">대화</button>
+    <button class="pill" id="shareBtn">초대</button>
+  </div>
+  <div id="listPanel" hidden></div>
+  <div id="bottom">
+    <div id="meetRow">
+      <button id="meetBtn">모임 시작 (내 위치 공유)</button>
+    </div>
+    <div id="meetState"></div>
+    <div id="sendRow">
+      <input id="msg" type="text" maxlength="200" placeholder="지도에 말풍선 남기기" autocomplete="off">
+      <button id="sendBtn">전송</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* =====================================================================
+   모임 지도 - 첫 버전 (MVP)
+   - 데모 모드: 같은 기기·같은 브라우저의 탭끼리만 대화가 연결됨 (혼자 테스트용)
+   - Firebase 모드: 아래 FIREBASE_CONFIG에 값을 넣으면 폰/PC 여러 기기가 연결됨
+   ===================================================================== */
+
+// ▼ Firebase 콘솔에서 복사한 설정을 여기에 붙여넣으면 여러 기기 연결 모드가 켜짐.
+//   (README.md의 "Firebase 연결" 참고) null이면 데모 모드.
+const FIREBASE_CONFIG = null;
+
+// ---------- 작은 도우미 ----------
+const $ = (id) => document.getElementById(id);
+function toast(text) {
+  const old = $("toast"); if (old) old.remove();
+  const t = document.createElement("div");
+  t.id = "toast"; t.textContent = text;       // textContent: 글자를 그대로 표시(HTML 해석 안 함)
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
+}
+function safeGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+function safeSet(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+
+// 이 기기의 고유 ID (처음 한 번만 만들어 저장)
+// 탭마다 다른 ID를 씀: 같은 브라우저 탭 2개로 데모 테스트할 때 서로 다른 사람으로 보이게 하기 위함
+let uid = null;
+try { uid = sessionStorage.getItem("uid"); } catch (e) {}
+if (!uid) {
+  uid = Math.random().toString(36).slice(2, 10);
+  try { sessionStorage.setItem("uid", uid); } catch (e) {}
+}
+
+// 방 코드: 헷갈리는 글자(0,O,1,I 등)를 뺀 6자리
+function makeRoomCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+function cleanRoom(s) { return (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20); }
+
+// ---------- 상태 ----------
+let nick = safeGet("nick") || "";
+let room = cleanRoom(new URLSearchParams(location.search).get("room"));
+let net = null;               // 통신 담당(데모 또는 Firebase)
+let map = null;
+let meeting = false;          // 모임 중(내 위치 공유 중)인지
+let watchId = null;
+let myPos = null;             // {lat, lng}
+let myMarker = null;
+let lastPublish = 0;
+const seenMsgs = new Set();   // 같은 메시지 중복 방지
+const msgList = [];           // 최근 메시지 보관
+const bubbleMarkers = [];     // 지도 위 말풍선들
+const memberMarkers = {};     // uid -> 마커
+let members = {};             // uid -> {nick,lat,lng,ts}
+
+const BUBBLE_LIFETIME = 6 * 60 * 60 * 1000;   // 말풍선은 6시간 동안만 표시
+const MEMBER_STALE = 2 * 60 * 1000;           // 2분 이상 갱신 없으면 위치 숨김
+
+// ---------- 통신(데모 모드) ----------
+function createDemoNet(roomCode) {
+  const ch = ("BroadcastChannel" in window) ? new BroadcastChannel("meetup-" + roomCode) : null;
+  const key = "meetup-msgs-" + roomCode;
+  const state = {};           // 데모용 멤버 상태
+  let handlers = {};
+  if (ch) ch.onmessage = (e) => {
+    const { type, data } = e.data || {};
+    if (type === "msg" && handlers.msg) handlers.msg(data);
+    if (type === "member") {
+      if (data.gone) delete state[data.uid]; else state[data.uid] = data;
+      if (handlers.members) handlers.members(Object.assign({}, state));
+    }
+  };
+  return {
+    mode: "demo",
+    start(h) {
+      handlers = h;
+      let saved = [];
+      try { saved = JSON.parse(safeGet(key) || "[]"); } catch (e) {}
+      saved.forEach((m) => h.msg(m));
+    },
+    sendMsg(m) {
+      let arr = [];
+      try { arr = JSON.parse(safeGet(key) || "[]"); } catch (e) {}
+      arr.push(m);
+      safeSet(key, JSON.stringify(arr.slice(-200)));
+      if (ch) ch.postMessage({ type: "msg", data: m });
+      handlers.msg(m);        // 내 화면에는 직접 표시
+    },
+    setMember(me) { if (ch) ch.postMessage({ type: "member", data: me }); },
+    removeMember() { if (ch) ch.postMessage({ type: "member", data: { uid: uid, gone: true } }); }
+  };
+}
+
+// ---------- 통신(Firebase 모드) ----------
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+async function createFirebaseNet(roomCode) {
+  await loadScript("https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js");
+  await loadScript("https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js");
+  firebase.initializeApp(FIREBASE_CONFIG);
+  const base = firebase.database().ref("rooms/" + roomCode);
+  return {
+    mode: "firebase",
+    start(h) {
+      base.child("messages").orderByChild("ts").limitToLast(100).on("child_added", (s) => h.msg(s.val()));
+      base.child("members").on("value", (s) => h.members(s.val() || {}));
+    },
+    sendMsg(m) { base.child("messages").push(m); },
+    setMember(me) {
+      const r = base.child("members/" + uid);
+      r.set(me);
+      r.onDisconnect().remove();      // 앱을 닫으면 내 위치 자동 삭제
+    },
+    removeMember() { base.child("members/" + uid).remove(); }
+  };
+}
+
+// ---------- 입장 ----------
+$("nick").value = nick;
+$("roomIn").value = room;
+$("modeNote").textContent = FIREBASE_CONFIG
+  ? "여러 기기 연결 모드예요."
+  : "지금은 '데모 모드'예요. 같은 기기의 탭끼리만 대화가 연결돼요. (여러 기기 연결은 README 참고)";
+
+$("createBtn").onclick = () => { $("roomIn").value = makeRoomCode(); enter(); };
+$("enterBtn").onclick = () => enter();
+
+async function enter() {
+  nick = $("nick").value.trim().slice(0, 12);
+  room = cleanRoom($("roomIn").value);
+  if (!nick) { toast("닉네임을 입력해주세요"); return; }
+  if (room.length < 4) { toast("방 코드는 4자 이상이어야 해요 (새 모임방 만들기를 눌러보세요)"); return; }
+  safeSet("nick", nick);
+  history.replaceState(null, "", "?room=" + room);   // 주소에 방 코드를 넣어 초대 링크로 사용
+
+  $("join").hidden = true;
+  $("app").hidden = false;
+  $("roomInfo").textContent = "방 " + room + " · " + nick;
+  initMap();
+
+  try {
+    net = FIREBASE_CONFIG ? await createFirebaseNet(room) : createDemoNet(room);
+  } catch (e) {
+    toast("서버 연결에 실패해서 데모 모드로 시작해요");
+    net = createDemoNet(room);
+  }
+  net.start({ msg: onMessage, members: onMembers });
+  updateMeetUI();
+  setInterval(refreshExpiry, 30000);
+}
+
+// ---------- 지도 ----------
+function initMap() {
+  map = L.map("map", { zoomControl: false }).setView([36.5, 127.8], 7);   // 처음엔 한국 전체
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+  L.control.zoom({ position: "bottomright" }).addTo(map);
+
+  // 한 번만 내 주변으로 이동 (공유가 아님: 서버로 보내지 않음)
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (p) => map.setView([p.coords.latitude, p.coords.longitude], 15),
+      () => {},
+      { timeout: 8000 }
+    );
+  }
+}
+
+// ---------- 말풍선 ----------
+function onMessage(m) {
+  if (!m || !m.id || seenMsgs.has(m.id)) return;
+  seenMsgs.add(m.id);
+  msgList.push(m);
+  if (Date.now() - m.ts > BUBBLE_LIFETIME) return;   // 너무 오래된 건 지도에 안 그림
+  addBubble(m);
+  renderList();
+}
+function addBubble(m) {
+  const el = document.createElement("div");
+  el.className = "bubble" + (m.uid === uid ? " mine" : "");
+  const who = document.createElement("b"); who.textContent = m.nick;       // 글자 그대로 표시
+  const txt = document.createElement("span"); txt.textContent = m.text;
+  el.appendChild(who); el.appendChild(txt);
+  const icon = L.divIcon({ className: "bubble-wrap", html: el, iconSize: [0, 0] });
+  const marker = L.marker([m.lat, m.lng], { icon: icon, zIndexOffset: 500 }).addTo(map);
+  bubbleMarkers.push({ marker: marker, ts: m.ts });
+}
+function renderList() {
+  const box = $("listPanel");
+  box.textContent = "";
+  const recent = msgList.slice(-30).reverse();
+  if (!recent.length) { box.textContent = "아직 대화가 없어요"; return; }
+  recent.forEach((m) => {
+    const row = document.createElement("div"); row.className = "row";
+    const s = document.createElement("small");
+    const d = new Date(m.ts);
+    s.textContent = m.nick + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    const t = document.createElement("span"); t.textContent = m.text;
+    row.appendChild(s); row.appendChild(t);
+    row.onclick = () => map.setView([m.lat, m.lng], Math.max(map.getZoom(), 15));   // 누르면 그 말풍선 위치로 이동
+    box.appendChild(row);
+  });
+}
+$("listBtn").onclick = () => { const p = $("listPanel"); p.hidden = !p.hidden; if (!p.hidden) renderList(); };
+
+$("sendBtn").onclick = sendMessage;
+$("msg").addEventListener("keydown", (e) => { if (e.key === "Enter") sendMessage(); });
+function sendMessage() {
+  const text = $("msg").value.trim();
+  if (!text || !net) return;
+  // 모임 중이면 내 위치에, 아니면 지금 지도 가운데에 말풍선을 남김
+  const at = (meeting && myPos) ? myPos : { lat: map.getCenter().lat, lng: map.getCenter().lng };
+  net.sendMsg({
+    id: uid + "-" + Date.now(),
+    uid: uid, nick: nick, text: text.slice(0, 200),
+    lat: at.lat, lng: at.lng, ts: Date.now()
+  });
+  $("msg").value = "";
+}
+
+// ---------- 모임(위치 공유) ----------
+$("meetBtn").onclick = () => (meeting ? stopMeet() : startMeet());
+
+function startMeet() {
+  if (!navigator.geolocation) { toast("이 브라우저는 위치 기능을 지원하지 않아요"); return; }
+  meeting = true;
+  updateMeetUI();
+  watchId = navigator.geolocation.watchPosition(
+    (p) => {
+      myPos = { lat: p.coords.latitude, lng: p.coords.longitude };
+      drawMe();
+      const now = Date.now();
+      if (now - lastPublish > 5000) {                 // 5초에 한 번만 전송
+        lastPublish = now;
+        net.setMember({ uid: uid, nick: nick, lat: myPos.lat, lng: myPos.lng, ts: now });
+      }
+    },
+    () => { toast("위치 권한이 필요해요 (브라우저 설정에서 허용)"); stopMeet(); },
+    { enableHighAccuracy: true, maximumAge: 5000 }
+  );
+}
+function stopMeet() {
+  meeting = false;
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if (net) net.removeMember();                         // 내 위치를 서버에서 즉시 삭제
+  if (myMarker) { map.removeLayer(myMarker); myMarker = null; }
+  myPos = null;
+  updateMeetUI();
+}
+function updateMeetUI() {
+  const b = $("meetBtn");
+  b.classList.toggle("on", meeting);
+  b.textContent = meeting ? "모임 종료 (위치 공유 끄기)" : "모임 시작 (내 위치 공유)";
+  $("meetState").textContent = meeting
+    ? "지금 방 사람들에게 내 위치가 보여요"
+    : "위치 공유 꺼짐 · 말풍선은 지도 가운데에 남겨져요";
+}
+function drawMe() {
+  if (!myMarker) {
+    myMarker = L.circleMarker([myPos.lat, myPos.lng], { radius: 9, color: "#fff", weight: 3, fillColor: "#2f6df6", fillOpacity: 1 }).addTo(map);
+    map.setView([myPos.lat, myPos.lng], Math.max(map.getZoom(), 15));
+  } else {
+    myMarker.setLatLng([myPos.lat, myPos.lng]);
+  }
+}
+
+// ---------- 다른 사람 위치 ----------
+function onMembers(all) { members = all || {}; renderMembers(); }
+function renderMembers() {
+  const now = Date.now();
+  Object.keys(memberMarkers).forEach((k) => {         // 없어졌거나 오래된 멤버 마커 제거
+    const m = members[k];
+    if (!m || now - m.ts > MEMBER_STALE) { map.removeLayer(memberMarkers[k]); delete memberMarkers[k]; }
+  });
+  Object.keys(members).forEach((k) => {
+    const m = members[k];
+    if (k === uid || now - m.ts > MEMBER_STALE) return;   // 내 것은 따로 그림
+    if (memberMarkers[k]) {
+      memberMarkers[k].setLatLng([m.lat, m.lng]);
+    } else {
+      const mk = L.circleMarker([m.lat, m.lng], { radius: 8, color: "#fff", weight: 3, fillColor: "#ff9500", fillOpacity: 1 }).addTo(map);
+      mk.bindTooltip(String(m.nick || "?"), { permanent: true, direction: "bottom", offset: [0, 6], className: "member-label" });   // 문자열로만 표시
+      memberMarkers[k] = mk;
+    }
+  });
+}
+function refreshExpiry() {
+  const now = Date.now();
+  for (let i = bubbleMarkers.length - 1; i >= 0; i--) {
+    if (now - bubbleMarkers[i].ts > BUBBLE_LIFETIME) { map.removeLayer(bubbleMarkers[i].marker); bubbleMarkers.splice(i, 1); }
+  }
+  renderMembers();
+}
+
+// ---------- 초대 ----------
+$("shareBtn").onclick = async () => {
+  const url = location.origin + location.pathname + "?room=" + room;
+  try {
+    if (navigator.share) { await navigator.share({ title: "모임 지도 초대", text: "같이 지도에서 대화해요", url: url }); return; }
+  } catch (e) { return; }                              // 사용자가 공유창을 닫은 경우
+  try { await navigator.clipboard.writeText(url); toast("초대 링크를 복사했어요"); }
+  catch (e) { prompt("이 링크를 복사해서 보내주세요", url); }
+};
+
+// 모임 중 탭을 닫을 때 내 위치를 지움
+window.addEventListener("pagehide", () => { if (meeting && net) net.removeMember(); });
+</script>
+</body>
+</html>
